@@ -150,7 +150,7 @@ bot.command('check', async (ctx) => {
 async function generateReferralLink(ctx, userId) {
     try {
         const connection = await db;
-        const referralLink = `https://t.me/@Habesha_433_CashMoneyBot?start=${userId}`;
+        const referralLink = `https://t.me/${ctx.botInfo.username}?start=${userId}`;
         await connection.query('UPDATE users SET referral_link = ?, points = points + 1 WHERE id = ?', [referralLink, userId]);
         ctx.reply('Here is your referral link: ' + referralLink);
 
