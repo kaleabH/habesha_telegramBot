@@ -9,7 +9,7 @@ const dbConfig = {
     host: 'localhost',
     user: 'root',
     password: '',
-    database: 'habesha4336',
+    database: 'habesha4337',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -70,7 +70,8 @@ bot.start(async (ctx) => {
         const [rows] = await connection.query('SELECT * FROM users WHERE telegram_id = ?', [telegramId]);
 
         if (rows.length === 0) {
-            await connection.query('INSERT INTO users (telegram_id) VALUES (?)', [telegramId]);
+            const referrerId = ctx.startPayload ? parseInt(ctx.startPayload, 10) : null;
+            await connection.query('INSERT INTO users (telegram_id, referrer_id) VALUES (?, ?)', [telegramId, referrerId]);
             ctx.reply('Welcome! Please join the following channels to earn points:');
         } else {
             ctx.reply('Welcome back! Please use /check to see if you have joined all channels.');
@@ -100,24 +101,41 @@ bot.command('check', async (ctx) => {
         const [user] = await connection.query('SELECT * FROM users WHERE telegram_id = ?', [telegramId]);
 
         if (user.length > 0) {
+            const userId = user[0].id;
             const [channels] = await connection.query('SELECT * FROM channels');
-            const notJoinedChannels = []; // List of channels the user hasn't joined
+            let joinedAllChannels = true;
 
-            // This is where you would check if the user has joined each channel.
-            // Since checking if a user has joined a channel requires Telegram API calls,
-            // we assume the check is done and we return all channels as not joined.
-            
-            channels.forEach(channel => {
-                notJoinedChannels.push(channel.channel_link);
-            });
+            // Check if the user has joined each channel
+            for (const channel of channels) {
+                let chatId = channel.channel_link;
 
-            if (notJoinedChannels.length > 0) {
-                ctx.reply('You have not joined all required channels:');
-                notJoinedChannels.forEach(channel => {
-                    ctx.reply(channel);
-                });
+                // Extract the username if the link is in the format https://t.me/username
+                if (chatId.startsWith('https://t.me/')) {
+                    chatId = chatId.replace('https://t.me/', '@');
+                }
+
+                try {
+                    const member = await bot.telegram.getChatMember(chatId, telegramId);
+                    if (member.status === 'left' || member.status === 'kicked') {
+                        joinedAllChannels = false;
+                        break;
+                    }
+                } catch (error) {
+                    if (error.response && error.response.error_code === 400) {
+                        console.error(`Error checking membership for ${channel.channel_link}: ${error.description}`);
+                    } else {
+                        console.error(`Unexpected error checking membership for ${channel.channel_link}:`, error);
+                    }
+                    joinedAllChannels = false;
+                    break;
+                }
+            }
+
+            if (joinedAllChannels) {
+                ctx.reply('You have joined all required channels.');
+                await generateReferralLink(ctx, userId);
             } else {
-                ctx.reply('You have joined all required channels! Here is your referral link: ' + user[0].referral_link);
+                ctx.reply('You have not joined all required channels. Please make sure to join all the channels listed above.');
             }
         } else {
             ctx.reply('You need to start the bot first using /start.');
@@ -132,9 +150,15 @@ bot.command('check', async (ctx) => {
 async function generateReferralLink(ctx, userId) {
     try {
         const connection = await db;
-        const referralLink = `https://t.me/your_bot_username?start=${userId}`;
-        await connection.query('UPDATE users SET referral_link = ? WHERE id = ?', [referralLink, userId]);
+        const referralLink = `https://t.me/@Habesha_433_CashMoneyBot?start=${userId}`;
+        await connection.query('UPDATE users SET referral_link = ?, points = points + 1 WHERE id = ?', [referralLink, userId]);
         ctx.reply('Here is your referral link: ' + referralLink);
+
+        // Award point to referrer if exists
+        const [user] = await connection.query('SELECT referrer_id FROM users WHERE id = ?', [userId]);
+        if (user[0].referrer_id) {
+            await connection.query('UPDATE users SET points = points + 1 WHERE id = ?', [user[0].referrer_id]);
+        }
     } catch (error) {
         console.error('Error generating referral link:', error);
         ctx.reply('An error occurred. Please try again later.');
