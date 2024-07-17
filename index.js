@@ -9,7 +9,7 @@ const dbConfig = {
     host: 'localhost',
     user: 'root',
     password: '',
-    database: 'habesha4337',
+    database: 'habesha4338',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -30,6 +30,7 @@ const db = initializeDatabase();
 
 // Admin credentials
 const adminId = 713655848; // Replace with your admin Telegram ID
+// const adminId = 676768892; // Replace with your admin Telegram ID
 const adminPassword = 'admin'; // Set your admin password
 
 let isAdminAuthenticated = false;
@@ -58,6 +59,7 @@ Admin Commands:
 /add_ad <ad_type> <website_name> <ad_link> - Add an advertisement
 /remove_ad <ad_link> - Remove an advertisement
 /list_top_users <top> - List top users based on points
+/list_referrals - List all referrals
     `;
     ctx.reply(commands);
 });
@@ -73,8 +75,11 @@ bot.start(async (ctx) => {
             const referrerId = ctx.startPayload ? parseInt(ctx.startPayload, 10) : null;
             await connection.query('INSERT INTO users (telegram_id, referrer_id) VALUES (?, ?)', [telegramId, referrerId]);
             ctx.reply('Welcome! Please join the following channels to earn points:');
+            ctx.reply('እንኳን ደና መጡ! ሁሉንም ቻናሎች በመቀላቀል ሽልማት ያግኙ:በመቀጠል  "/check"  ሲሉ  "referal link" ያገኛሉ');
         } else {
             ctx.reply('Welcome back! Please use /check to see if you have joined all channels.');
+            ctx.reply('እንኳን ደና መጡ! ሁሉንም ቻናሎች በመቀላቀል ሽልማት ያግኙ:በመቀጠል  "/check"  ሲሉ  "referal link" ያገኛሉ');
+
         }
 
         const [channels] = await connection.query('SELECT * FROM channels');
@@ -85,7 +90,7 @@ bot.start(async (ctx) => {
         const adTypes = ['website', 'YouTube', 'TikTok', 'Playstore']; // Define your ad types here
         const buttons = adTypes.map(type => Markup.button.text(type));
         const keyboard = Markup.keyboard(buttons).resize();
-        ctx.reply('Select ad type:', keyboard);
+        ctx.reply('ad type:', keyboard);
 
     } catch (error) {
         console.error('Error during start command:', error);
@@ -245,6 +250,31 @@ bot.command('list_top_users', isAdmin, async (ctx) => {
         }
     } catch (error) {
         console.error('Error listing top users:', error);
+        ctx.reply('An error occurred. Please try again later.');
+    }
+});
+
+// Admin command to list all referrals
+bot.command('list_referrals', isAdmin, async (ctx) => {
+    try {
+        const connection = await db;
+        const [referrals] = await connection.query(`
+            SELECT u1.telegram_id AS user, u2.telegram_id AS referred_user
+            FROM users u1
+            JOIN users u2 ON u1.id = u2.referrer_id
+        `);
+
+        if (referrals.length > 0) {
+            let response = 'Referrals:\n';
+            referrals.forEach(referral => {
+                response += `User: ${referral.user}, Referred User: ${referral.referred_user}\n`;
+            });
+            ctx.reply(response);
+        } else {
+            ctx.reply('No referrals found.');
+        }
+    } catch (error) {
+        console.error('Error listing referrals:', error);
         ctx.reply('An error occurred. Please try again later.');
     }
 });
