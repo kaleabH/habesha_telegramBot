@@ -30,7 +30,6 @@ const db = initializeDatabase();
 
 // Admin credentials
 const adminId = 713655848; // Replace with your admin Telegram ID
-// const adminId = 676768892; // Replace with your admin Telegram ID
 const adminPassword = 'admin'; // Set your admin password
 
 let isAdminAuthenticated = false;
@@ -51,15 +50,6 @@ Available Commands:
 /start - Start the bot
 /check - Check if you have joined all required channels
 /help - List all commands
-
-Admin Commands:
-/admin <password> - Authenticate as admin
-/add_channel <channel_link> - Add a new channel
-/remove_channel <channel_link> - Remove a channel
-/add_ad <ad_type> <website_name> <ad_link> - Add an advertisement
-/remove_ad <ad_link> - Remove an advertisement
-/list_top_users <top> - List top users based on points
-/list_referrals - List all referrals
     `;
     ctx.reply(commands);
 });
@@ -69,11 +59,12 @@ bot.start(async (ctx) => {
     try {
         const connection = await db;
         const telegramId = ctx.from.id;
+        const username = ctx.from.username || ''; // Get the username or use an empty string if not available
         const [rows] = await connection.query('SELECT * FROM users WHERE telegram_id = ?', [telegramId]);
 
         if (rows.length === 0) {
             const referrerId = ctx.startPayload ? parseInt(ctx.startPayload, 10) : null;
-            await connection.query('INSERT INTO users (telegram_id, referrer_id) VALUES (?, ?)', [telegramId, referrerId]);
+            await connection.query('INSERT INTO users (telegram_id, referrer_id, username) VALUES (?, ?, ?)', [telegramId, referrerId, username]);
             ctx.reply('Welcome! Please join the following channels to earn points:');
             ctx.reply('እንኳን ደና መጡ! ሁሉንም ቻናሎች በመቀላቀል ሽልማት ያግኙ:በመቀጠል  "/check"  ሲሉ  "referal link" ያገኛሉ');
         } else {
@@ -98,6 +89,7 @@ bot.start(async (ctx) => {
     }
 });
 
+
 // Check command
 bot.command('check', async (ctx) => {
     try {
@@ -109,6 +101,7 @@ bot.command('check', async (ctx) => {
             const userId = user[0].id;
             const [channels] = await connection.query('SELECT * FROM channels');
             let joinedAllChannels = true;
+            let notJoinedChannels = [];
 
             // Check if the user has joined each channel
             for (const channel of channels) {
@@ -123,16 +116,17 @@ bot.command('check', async (ctx) => {
                     const member = await bot.telegram.getChatMember(chatId, telegramId);
                     if (member.status === 'left' || member.status === 'kicked') {
                         joinedAllChannels = false;
-                        break;
+                        notJoinedChannels.push(channel.channel_link);
                     }
                 } catch (error) {
-                    if (error.response && error.response.error_code === 400) {
-                        console.error(`Error checking membership for ${channel.channel_link}: ${error.description}`);
+                    if (error.response && (error.response.error_code === 400 || error.response.error_code === 403)) {
+                        // Treat errors like "user not found" or "chat not found" as the user being joined
+                        console.warn(`Error checking membership for ${channel.channel_link}: ${error.description}`);
                     } else {
                         console.error(`Unexpected error checking membership for ${channel.channel_link}:`, error);
+                        joinedAllChannels = false;
+                        notJoinedChannels.push(channel.channel_link);
                     }
-                    joinedAllChannels = false;
-                    break;
                 }
             }
 
@@ -140,7 +134,9 @@ bot.command('check', async (ctx) => {
                 ctx.reply('You have joined all required channels.');
                 await generateReferralLink(ctx, userId);
             } else {
-                ctx.reply('You have not joined all required channels. Please make sure to join all the channels listed above.');
+                let notJoinedMessage = 'You have not joined all required channels. Please join the following channels:\n';
+                notJoinedMessage += notJoinedChannels.map(link => `- ${link}`).join('\n');
+                ctx.reply(notJoinedMessage);
             }
         } else {
             ctx.reply('You need to start the bot first using /start.');
@@ -150,6 +146,7 @@ bot.command('check', async (ctx) => {
         ctx.reply('An error occurred. Please try again later.');
     }
 });
+
 
 // Referral link generation (run this once when user joins all channels)
 async function generateReferralLink(ctx, userId) {
@@ -174,73 +171,91 @@ async function generateReferralLink(ctx, userId) {
 bot.command('admin', (ctx) => {
     const [_, password] = ctx.message.text.split(' ');
     if (ctx.from.id === adminId && password === adminPassword) {
-        ctx.reply('Admin authenticated. You can now use admin commands.');
+        ctx.reply('Admin authenticated. You can now use admin commands.', Markup.inlineKeyboard([
+            [Markup.button.callback('Add Channel', 'add_channel')],
+            [Markup.button.callback('Remove Channel', 'remove_channel')],
+            [Markup.button.callback('Add Advertisement', 'add_ad')],
+            [Markup.button.callback('Remove Advertisement', 'remove_ad')],
+            [Markup.button.callback('List Top Users', 'list_top_users')],
+            [Markup.button.callback('List Referrals', 'list_referrals')]
+        ]));
         isAdminAuthenticated = true;
     } else {
         ctx.reply('Incorrect password. Access denied.');
     }
 });
 
-// Admin commands to manage channels and advertisements (with authentication)
-bot.command('add_channel', isAdmin, async (ctx) => {
-    const channelLink = ctx.message.text.split(' ')[1];
-    try {
-        const connection = await db;
-        await connection.query('INSERT INTO channels (channel_link) VALUES (?)', [channelLink]);
-        ctx.reply('Channel added successfully.');
-    } catch (error) {
-        console.error('Error adding channel:', error);
-        ctx.reply('An error occurred. Please try again later.');
-    }
+// Admin actions handlers
+bot.action('add_channel', isAdmin, (ctx) => {
+    ctx.reply('Please enter the channel link to add:', Markup.forceReply());
+    bot.on('text', async (ctx) => {
+        const channelLink = ctx.message.text;
+        try {
+            const connection = await db;
+            await connection.query('INSERT INTO channels (channel_link) VALUES (?)', [channelLink]);
+            ctx.reply('Channel added successfully.');
+        } catch (error) {
+            console.error('Error adding channel:', error);
+            ctx.reply('An error occurred. Please try again later.');
+        }
+    });
 });
 
-bot.command('remove_channel', isAdmin, async (ctx) => {
-    const channelLink = ctx.message.text.split(' ')[1];
-    try {
-        const connection = await db;
-        await connection.query('DELETE FROM channels WHERE channel_link = ?', [channelLink]);
-        ctx.reply('Channel removed successfully.');
-    } catch (error) {
-        console.error('Error removing channel:', error);
-        ctx.reply('An error occurred. Please try again later.');
-    }
+bot.action('remove_channel', isAdmin, (ctx) => {
+    ctx.reply('Please enter the channel link to remove:', Markup.forceReply());
+    bot.on('text', async (ctx) => {
+        const channelLink = ctx.message.text;
+        try {
+            const connection = await db;
+            await connection.query('DELETE FROM channels WHERE channel_link = ?', [channelLink]);
+            ctx.reply('Channel removed successfully.');
+        } catch (error) {
+            console.error('Error removing channel:', error);
+            ctx.reply('An error occurred. Please try again later.');
+        }
+    });
 });
 
-bot.command('add_ad', isAdmin, async (ctx) => {
-    const [_, adType, websiteName, adLink] = ctx.message.text.split(' ');
-    const adTypes = ['website', 'YouTube', 'TikTok', 'Playstore']; // Define your ad types here
-    if (!adTypes.includes(adType)) {
-        return ctx.reply('Invalid ad type. Please use one of the following: ' + adTypes.join(', '));
-    }
-    try {
-        const connection = await db;
-        await connection.query('INSERT INTO advertisements (ad_type, website_name, ad_link) VALUES (?, ?, ?)', [adType, websiteName, adLink]);
-        ctx.reply('Advertisement added successfully.');
-    } catch (error) {
-        console.error('Error adding advertisement:', error);
-        ctx.reply('An error occurred. Please try again later.');
-    }
+bot.action('add_ad', isAdmin, (ctx) => {
+    ctx.reply('Please enter the ad details in the format: ad_type website_name ad_link', Markup.forceReply());
+    bot.on('text', async (ctx) => {
+        const [adType, websiteName, adLink] = ctx.message.text.split(' ');
+        const adTypes = ['website', 'YouTube', 'TikTok', 'Playstore']; // Define your ad types here
+        if (!adTypes.includes(adType)) {
+            return ctx.reply('Invalid ad type. Please use one of the following: ' + adTypes.join(', '));
+        }
+        try {
+            const connection = await db;
+            await connection.query('INSERT INTO advertisements (ad_type, website_name, ad_link) VALUES (?, ?, ?)', [adType, websiteName, adLink]);
+            ctx.reply('Advertisement added successfully.');
+        } catch (error) {
+            console.error('Error adding advertisement:', error);
+            ctx.reply('An error occurred. Please try again later.');
+        }
+    });
 });
 
-bot.command('remove_ad', isAdmin, async (ctx) => {
-    const adLink = ctx.message.text.split(' ')[1];
-    try {
-        const connection = await db;
-        await connection.query('DELETE FROM advertisements WHERE ad_link = ?', [adLink]);
-        ctx.reply('Advertisement removed successfully.');
-    } catch (error) {
-        console.error('Error removing advertisement:', error);
-        ctx.reply('An error occurred. Please try again later.');
-    }
+bot.action('remove_ad', isAdmin, (ctx) => {
+    ctx.reply('Please enter the ad link to remove:', Markup.forceReply());
+    bot.on('text', async (ctx) => {
+        const adLink = ctx.message.text;
+        try {
+            const connection = await db;
+            await connection.query('DELETE FROM advertisements WHERE ad_link = ?', [adLink]);
+            ctx.reply('Advertisement removed successfully.');
+        } catch (error) {
+            console.error('Error removing advertisement:', error);
+            ctx.reply('An error occurred. Please try again later.');
+        }
+    });
 });
 
-bot.command('list_top_users', isAdmin, async (ctx) => {
-    const [_, top] = ctx.message.text.split(' ');
+bot.action('list_top_users', isAdmin, async (ctx) => {
     try {
         const connection = await db;
-        const [rows] = await connection.query('SELECT telegram_id, points FROM users ORDER BY points DESC LIMIT ?', [parseInt(top)]);
+        const [rows] = await connection.query('SELECT telegram_id, points FROM users ORDER BY points DESC LIMIT 10');
         if (rows.length > 0) {
-            let response = `Top ${top} users:\n`;
+            let response = 'Top 10 users:\n';
             rows.forEach((user, index) => {
                 response += `${index + 1}. Telegram ID: ${user.telegram_id}, Points: ${user.points}\n`;
             });
@@ -255,11 +270,15 @@ bot.command('list_top_users', isAdmin, async (ctx) => {
 });
 
 // Admin command to list all referrals
-bot.command('list_referrals', isAdmin, async (ctx) => {
+bot.action('list_referrals', isAdmin, async (ctx) => {
     try {
         const connection = await db;
         const [referrals] = await connection.query(`
-            SELECT u1.telegram_id AS user, u2.telegram_id AS referred_user
+            SELECT 
+                u1.telegram_id AS user_id, 
+                u1.username AS user_username, 
+                u2.telegram_id AS referred_user_id, 
+                u2.username AS referred_user_username
             FROM users u1
             JOIN users u2 ON u1.id = u2.referrer_id
         `);
@@ -267,7 +286,7 @@ bot.command('list_referrals', isAdmin, async (ctx) => {
         if (referrals.length > 0) {
             let response = 'Referrals:\n';
             referrals.forEach(referral => {
-                response += `User: ${referral.user}, Referred User: ${referral.referred_user}\n`;
+                response += `User: ${referral.user_username} (ID: ${referral.user_id}), Referred User: ${referral.referred_user_username} (ID: ${referral.referred_user_id})\n`;
             });
             ctx.reply(response);
         } else {
@@ -278,6 +297,7 @@ bot.command('list_referrals', isAdmin, async (ctx) => {
         ctx.reply('An error occurred. Please try again later.');
     }
 });
+
 
 // Handler for ad_type button clicks
 bot.hears(['website', 'YouTube', 'TikTok', 'Playstore'], async (ctx) => {
