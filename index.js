@@ -5,11 +5,12 @@ require('dotenv').config();
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
 // MySQL Connection
+
 const dbConfig = {
-    host: 'localhost',
-    user: 'root',
-    password: '',
-    database: 'habesha4339',
+    host: process.env.DB_HOST,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -29,8 +30,8 @@ async function initializeDatabase() {
 const db = initializeDatabase();
 
 // Admin credentials
-const adminId = 713655848; // Replace with your admin Telegram ID
-const adminPassword = 'admin'; // Set your admin password
+const adminId = process.env.ADMIN_ID; // Parse admin ID from .env file
+const adminPassword = process.env.ADMIN_PASSWORD;
 
 let isAdminAuthenticated = false;
 const userStates = {}; // Store states for users
