@@ -9,7 +9,7 @@ const dbConfig = {
     host: 'localhost',
     user: 'root',
     password: '',
-    database: 'habesha4338',
+    database: 'habesha4339',
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -33,6 +33,7 @@ const adminId = 713655848; // Replace with your admin Telegram ID
 const adminPassword = 'admin'; // Set your admin password
 
 let isAdminAuthenticated = false;
+const userStates = {}; // Store states for users
 
 // Middleware to check admin authentication
 function isAdmin(ctx, next) {
@@ -70,25 +71,23 @@ bot.start(async (ctx) => {
         } else {
             ctx.reply('Welcome back! Please use /check to see if you have joined all channels.');
             ctx.reply('እንኳን ደና መጡ! ሁሉንም ቻናሎች በመቀላቀል ሽልማት ያግኙ:በመቀጠል  "/check"  ሲሉ  "referal link" ያገኛሉ');
-
         }
 
         const [channels] = await connection.query('SELECT * FROM channels');
         const channelList = channels.map(channel => `Join this channel: ${channel.channel_link}`).join('\n');
         ctx.reply(channelList);
 
-        // Show the ad type options keyboard by default
-        const adTypes = ['website', 'YouTube', 'TikTok', 'Playstore']; // Define your ad types here
-        const buttons = adTypes.map(type => Markup.button.text(type));
-        const keyboard = Markup.keyboard(buttons).resize();
-        ctx.reply('ad type:', keyboard);
+        // Fetch ad types and links from the database
+        const [ads] = await connection.query('SELECT ad_type FROM advertisements');
+        const adTypes = ads.map(ad => ad.ad_type);
+        const keyboard = Markup.keyboard(adTypes.map(type => [type])).resize().oneTime();
+        ctx.reply('Select an ad type:', keyboard);
 
     } catch (error) {
         console.error('Error during start command:', error);
         ctx.reply('An error occurred. Please try again later.');
     }
 });
-
 
 // Check command
 bot.command('check', async (ctx) => {
@@ -147,7 +146,6 @@ bot.command('check', async (ctx) => {
     }
 });
 
-
 // Referral link generation (run this once when user joins all channels)
 async function generateReferralLink(ctx, userId) {
     try {
@@ -185,136 +183,288 @@ bot.command('admin', (ctx) => {
     }
 });
 
-// Admin actions handlers
+// Admin action handlers
+// Add Channel Command
 bot.action('add_channel', isAdmin, (ctx) => {
-    ctx.reply('Please enter the channel link to add:', Markup.forceReply());
-    bot.on('text', async (ctx) => {
+    userStates[ctx.from.id] = 'awaiting_channel_link';
+    ctx.reply('Please enter the channel link to add (e.g., https://t.me/yourchannel):', Markup.forceReply());
+});
+
+bot.on('text', async (ctx) => {
+    const adminId = ctx.from.id;
+
+    if (userStates[adminId] === 'awaiting_channel_link') {
         const channelLink = ctx.message.text;
+
+        // Validate Telegram channel link format
+        const validChannelFormat = /^https:\/\/t\.me\/.+/;
+        if (!validChannelFormat.test(channelLink)) {
+            ctx.reply('Invalid channel link format. Please provide a valid Telegram channel link (e.g., https://t.me/yourchannel).');
+            return;
+        }
+
         try {
             const connection = await db;
-            await connection.query('INSERT INTO channels (channel_link) VALUES (?)', [channelLink]);
-            ctx.reply('Channel added successfully.');
+            const [existingChannels] = await connection.query('SELECT * FROM channels WHERE channel_link = ?', [channelLink]);
+
+            if (existingChannels.length > 0) {
+                ctx.reply('Channel already exists.');
+            } else {
+                await connection.query('INSERT INTO channels (channel_link) VALUES (?)', [channelLink]);
+                ctx.reply('Channel added successfully.');
+            }
         } catch (error) {
             console.error('Error adding channel:', error);
-            ctx.reply('An error occurred. Please try again later.');
+            ctx.reply('An error occurred while adding the channel. Please try again later.');
+        } finally {
+            delete userStates[adminId]; // Reset the state
         }
-    });
-});
-
-bot.action('remove_channel', isAdmin, (ctx) => {
-    ctx.reply('Please enter the channel link to remove:', Markup.forceReply());
-    bot.on('text', async (ctx) => {
+    } else if (userStates[adminId] === 'awaiting_channel_removal') {
         const channelLink = ctx.message.text;
+
         try {
             const connection = await db;
-            await connection.query('DELETE FROM channels WHERE channel_link = ?', [channelLink]);
-            ctx.reply('Channel removed successfully.');
+            const [existingChannels] = await connection.query('SELECT * FROM channels WHERE channel_link = ?', [channelLink]);
+
+            if (existingChannels.length > 0) {
+                await connection.query('DELETE FROM channels WHERE channel_link = ?', [channelLink]);
+                ctx.reply('Channel removed successfully.');
+            } else {
+                ctx.reply('Channel not found.');
+            }
         } catch (error) {
             console.error('Error removing channel:', error);
-            ctx.reply('An error occurred. Please try again later.');
+            ctx.reply('An error occurred while removing the channel. Please try again later.');
+        } finally {
+            delete userStates[adminId]; // Reset the state
         }
-    });
+    } else {
+        const adTypes = await getAdTypesFromDatabase();
+        if (adTypes.includes(ctx.message.text)) {
+            // User selected an ad type
+            await sendAdLink(ctx, ctx.message.text);
+        } else {
+            ctx.reply('Unknown command. Please use /help to see the list of available commands.');
+        }
+    }
 });
 
+// ----------------   remove channel ----------------
+bot.action('remove_channel', isAdmin, async (ctx) => {
+    try {
+        const connection = await db;
+        const [channels] = await connection.query('SELECT * FROM channels');
+        const keyboard = Markup.inlineKeyboard(channels.map(channel => [Markup.button.callback(channel.channel_link, `remove_channel_${channel.id}`)]));
+        ctx.reply('Select a channel to remove:', keyboard);
+    } catch (error) {
+        console.error('Error fetching channels:', error);
+        ctx.reply('An error occurred. Please try again later.');
+    }
+});
+
+bot.action(/^remove_channel_(\d+)$/, isAdmin, async (ctx) => {
+    const channelId = ctx.match[1];
+    try {
+        const connection = await db;
+        await connection.query('DELETE FROM channels WHERE id = ?', [channelId]);
+        ctx.reply('Channel removed successfully.');
+    } catch (error) {
+        console.error('Error removing channel:', error);
+        ctx.reply('An error occurred. Please try again later.');
+    }
+});
+
+// ------------------ADD AD COMMAND ----------------
+// Add Advertisement Command
 bot.action('add_ad', isAdmin, (ctx) => {
-    ctx.reply('Please enter the ad details in the format: ad_type website_name ad_link', Markup.forceReply());
-    bot.on('text', async (ctx) => {
-        const [adType, websiteName, adLink] = ctx.message.text.split(' ');
-        const adTypes = ['website', 'YouTube', 'TikTok', 'Playstore']; // Define your ad types here
-        if (!adTypes.includes(adType)) {
-            return ctx.reply('Invalid ad type. Please use one of the following: ' + adTypes.join(', '));
+    userStates[ctx.from.id] = 'awaiting_ad_details';
+    ctx.reply('Please enter the advertisement type and link in the following format:\n\nad_type, ad_link');
+});
+
+bot.on('text', async (ctx) => {
+    const adminId = ctx.from.id;
+
+    if (userStates[adminId] === 'awaiting_ad_details') {
+        const adInput = ctx.message.text.split(',').map(item => item.trim());
+        if (adInput.length !== 2) {
+            ctx.reply('Invalid format. Please provide the advertisement type and link in the format:\n\nad_type, ad_link');
+            return;
         }
+
+        const [adType, adLink] = adInput;
+
+        // Validate URL format
+        const validUrlFormat = /^https?:\/\/.+/;
+        if (!validUrlFormat.test(adLink)) {
+            ctx.reply('Invalid ad link format. Please provide a valid URL (e.g., https://example.com).');
+            return;
+        }
+
         try {
             const connection = await db;
-            await connection.query('INSERT INTO advertisements (ad_type, website_name, ad_link) VALUES (?, ?, ?)', [adType, websiteName, adLink]);
-            ctx.reply('Advertisement added successfully.');
+            const [existingAds] = await connection.query('SELECT * FROM advertisements WHERE ad_type = ? AND ad_link = ?', [adType, adLink]);
+
+            if (existingAds.length > 0) {
+                ctx.reply('Advertisement already exists.');
+            } else {
+                await connection.query('INSERT INTO advertisements (ad_type, ad_link) VALUES (?, ?)', [adType, adLink]);
+                ctx.reply('Advertisement added successfully.');
+            }
         } catch (error) {
             console.error('Error adding advertisement:', error);
-            ctx.reply('An error occurred. Please try again later.');
+            ctx.reply('An error occurred while adding the advertisement. Please try again later.');
+        } finally {
+            delete userStates[adminId]; // Reset the state
         }
-    });
-});
+    } else if (userStates[adminId] === 'awaiting_channel_link') {
+        // Existing add_channel handling
+        const channelLink = ctx.message.text;
 
-bot.action('remove_ad', isAdmin, (ctx) => {
-    ctx.reply('Please enter the ad link to remove:', Markup.forceReply());
-    bot.on('text', async (ctx) => {
-        const adLink = ctx.message.text;
+        // Validate Telegram channel link format
+        const validChannelFormat = /^https:\/\/t\.me\/.+/;
+        if (!validChannelFormat.test(channelLink)) {
+            ctx.reply('Invalid channel link format. Please provide a valid Telegram channel link (e.g., https://t.me/yourchannel).');
+            return;
+        }
+
         try {
             const connection = await db;
-            await connection.query('DELETE FROM advertisements WHERE ad_link = ?', [adLink]);
-            ctx.reply('Advertisement removed successfully.');
+            const [existingChannels] = await connection.query('SELECT * FROM channels WHERE channel_link = ?', [channelLink]);
+
+            if (existingChannels.length > 0) {
+                ctx.reply('Channel already exists.');
+            } else {
+                await connection.query('INSERT INTO channels (channel_link) VALUES (?)', [channelLink]);
+                ctx.reply('Channel added successfully.');
+            }
         } catch (error) {
-            console.error('Error removing advertisement:', error);
-            ctx.reply('An error occurred. Please try again later.');
+            console.error('Error adding channel:', error);
+            ctx.reply('An error occurred while adding the channel. Please try again later.');
+        } finally {
+            delete userStates[adminId]; // Reset the state
         }
-    });
+    } else if (userStates[adminId] === 'awaiting_channel_removal') {
+        // Existing remove_channel handling
+        const channelLink = ctx.message.text;
+
+        try {
+            const connection = await db;
+            const [existingChannels] = await connection.query('SELECT * FROM channels WHERE channel_link = ?', [channelLink]);
+
+            if (existingChannels.length > 0) {
+                await connection.query('DELETE FROM channels WHERE channel_link = ?', [channelLink]);
+                ctx.reply('Channel removed successfully.');
+            } else {
+                ctx.reply('Channel not found.');
+            }
+        } catch (error) {
+            console.error('Error removing channel:', error);
+            ctx.reply('An error occurred while removing the channel. Please try again later.');
+        } finally {
+            delete userStates[adminId]; // Reset the state
+        }
+    } else {
+        const adTypes = await getAdTypesFromDatabase();
+        if (adTypes.includes(ctx.message.text)) {
+            // User selected an ad type
+            await sendAdLink(ctx, ctx.message.text);
+        } else {
+            ctx.reply('Unknown command. Please use /help to see the list of available commands.');
+        }
+    }
 });
+
+
+// -----------Remove Add ----------
+bot.action('remove_ad', isAdmin, async (ctx) => {
+    try {
+        const connection = await db;
+        const [ads] = await connection.query('SELECT * FROM advertisements');
+        const keyboard = Markup.inlineKeyboard(ads.map(ad => [Markup.button.callback(`${ad.ad_type} - ${ad.ad_link}`, `remove_ad_${ad.id}`)]));
+        ctx.reply('Select an ad to remove:', keyboard);
+    } catch (error) {
+        console.error('Error fetching ads:', error);
+        ctx.reply('An error occurred. Please try again later.');
+    }
+});
+
+bot.action(/^remove_ad_(\d+)$/, isAdmin, async (ctx) => {
+    const adId = ctx.match[1];
+    try {
+        const connection = await db;
+        await connection.query('DELETE FROM advertisements WHERE id = ?', [adId]);
+        ctx.reply('Ad removed successfully.');
+    } catch (error) {
+        console.error('Error removing ad:', error);
+        ctx.reply('An error occurred. Please try again later.');
+    }
+});
+
+//----------List top users ------------
 
 bot.action('list_top_users', isAdmin, async (ctx) => {
     try {
         const connection = await db;
-        const [rows] = await connection.query('SELECT telegram_id, points FROM users ORDER BY points DESC LIMIT 10');
-        if (rows.length > 0) {
-            let response = 'Top 10 users:\n';
-            rows.forEach((user, index) => {
-                response += `${index + 1}. Telegram ID: ${user.telegram_id}, Points: ${user.points}\n`;
-            });
-            ctx.reply(response);
-        } else {
-            ctx.reply('No users found.');
-        }
+        const [topUsers] = await connection.query('SELECT username, points FROM users ORDER BY points DESC LIMIT 200');
+        let message = 'Top 200 Users:\n';
+        topUsers.forEach((user, index) => {
+            message += `${index + 1}. ${user.username} - ${user.points} points\n`;
+        });
+        ctx.reply(message);
     } catch (error) {
         console.error('Error listing top users:', error);
-        ctx.reply('An error occurred. Please try again later.');
+        ctx.reply('An error occurred while listing top users. Please try again later.');
     }
 });
 
-// Admin command to list all referrals
+
+//----------------List Referrals ------
 bot.action('list_referrals', isAdmin, async (ctx) => {
     try {
         const connection = await db;
-        const [referrals] = await connection.query(`
-            SELECT 
-                u1.telegram_id AS user_id, 
-                u1.username AS user_username, 
-                u2.telegram_id AS referred_user_id, 
-                u2.username AS referred_user_username
+        const [users] = await connection.query(`
+            SELECT u1.username AS referrer, u2.username AS referred
             FROM users u1
             JOIN users u2 ON u1.id = u2.referrer_id
+            ORDER BY u1.username, u2.username
         `);
-
-        if (referrals.length > 0) {
-            let response = 'Referrals:\n';
-            referrals.forEach(referral => {
-                response += `User: ${referral.user_username} (ID: ${referral.user_id}), Referred User: ${referral.referred_user_username} (ID: ${referral.referred_user_id})\n`;
-            });
-            ctx.reply(response);
-        } else {
-            ctx.reply('No referrals found.');
-        }
+        const referralsList = users.map(user => `Referrer: ${user.referrer || 'Unknown'} - Referred: ${user.referred || 'Unknown'}`).join('\n');
+        ctx.reply('Referrals List:\n' + referralsList);
     } catch (error) {
-        console.error('Error listing referrals:', error);
+        console.error('Error fetching referrals:', error);
         ctx.reply('An error occurred. Please try again later.');
     }
 });
 
+// Fetch ad types from the database
+async function getAdTypesFromDatabase() {
+    const connection = await db;
+    const [ads] = await connection.query('SELECT ad_type FROM advertisements');
+    return ads.map(ad => ad.ad_type);
+}
 
-// Handler for ad_type button clicks
-bot.hears(['website', 'YouTube', 'TikTok', 'Playstore'], async (ctx) => {
-    const adType = ctx.message.text;
+// Send ad link based on selected ad type
+async function sendAdLink(ctx, adType) {
     try {
         const connection = await db;
-        const [ads] = await connection.query('SELECT * FROM advertisements WHERE ad_type = ?', [adType]);
-        if (ads.length > 0) {
-            const buttons = ads.map(ad => Markup.button.url(ad.website_name, ad.ad_link));
-            ctx.reply(`Advertisements for ${adType}:`, Markup.inlineKeyboard(buttons, { columns: 2 }));
+        const [ad] = await connection.query('SELECT ad_link FROM advertisements WHERE ad_type = ?', [adType]);
+        if (ad.length > 0) {
+            ctx.reply(`Ad Link for ${adType}: ${ad[0].ad_link}`);
         } else {
-            ctx.reply(`No advertisements found for ${adType}.`);
+            ctx.reply('No ad link found for the selected ad type.');
         }
     } catch (error) {
-        console.error(`Error fetching advertisements for ${adType}:`, error);
+        console.error('Error fetching ad link:', error);
         ctx.reply('An error occurred. Please try again later.');
     }
+}
+
+// Error handling
+bot.catch((err) => {
+    console.error('Bot error:', err);
 });
 
-bot.launch();
+// Start the bot
+bot.launch().then(() => {
+    console.log('Bot started successfully');
+});
