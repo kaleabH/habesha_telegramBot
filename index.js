@@ -8,7 +8,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const dbConfig = {
     host: 'localhost',
     user: 'root',
-    password: '',
+    password: 'root',
     database: 'habesha4339',
     waitForConnections: true,
     connectionLimit: 10,
@@ -29,7 +29,7 @@ async function initializeDatabase() {
 const db = initializeDatabase();
 
 // Admin credentials
-const adminId = 713655848; // Replace with your admin Telegram ID
+const adminId = 676768892; // Replace with your admin Telegram ID
 const adminPassword = 'admin'; // Set your admin password
 
 let isAdminAuthenticated = false;
