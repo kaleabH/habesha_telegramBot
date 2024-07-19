@@ -5,13 +5,14 @@ require('dotenv').config();
 const bot = new Telegraf(process.env.BOT_TOKEN);
 
 // MySQL Connection
+
 const dbConfig = {
     host: 'localhost',
     user: 'root',
     password: 'root',
     database: 'habesha4339',
     waitForConnections: true,
-    connectionLimit: 10,
+    connectionLimit: 100,
     queueLimit: 0
 };
 
